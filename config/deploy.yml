@@ -1,0 +1,35 @@
+service: vastos-api
+image: ghcr.io/vastos2026/vastos-api
+
+servers:
+  web:
+    hosts:
+      - 167.233.124.12
+
+# kamal-proxy owns 80/443 on the server: health-checked container swap,
+# zero downtime, automatic rollback on failed health check, and its own
+# Let's Encrypt TLS. Caddy (used to prove DNS/TLS during Phase 02) must be
+# stopped before the first deploy or it'll conflict on the same ports:
+#   ssh root@167.233.124.12 "systemctl stop caddy && systemctl disable caddy"
+proxy:
+  ssl: true
+  host: arc.vastos.in
+  app_port: 3000
+  healthcheck:
+    path: /health
+    interval: 5
+    timeout: 5
+
+registry:
+  server: ghcr.io
+  username: vastos2026
+  password:
+    - KAMAL_REGISTRY_PASSWORD
+
+env:
+  secret:
+    - SUPABASE_URL
+    - SUPABASE_ANON_KEY
+
+ssh:
+  user: root
