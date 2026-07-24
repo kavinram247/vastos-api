@@ -1,5 +1,8 @@
 service: vastos-api
-image: ghcr.io/vastos2026/vastos-api
+image: ghcr.io/kavinram247/vastos-api
+
+builder:
+  arch: amd64
 
 servers:
   web:
@@ -22,7 +25,7 @@ proxy:
 
 registry:
   server: ghcr.io
-  username: vastos2026
+  username: kavinram247
   password:
     - KAMAL_REGISTRY_PASSWORD
 
