@@ -29,10 +29,19 @@ registry:
   password:
     - KAMAL_REGISTRY_PASSWORD
 
+# ALLOWED_ORIGINS isn't sensitive, but goes through `secret:` (sourced from
+# the deploy environment / .kamal/secrets) same as SUPABASE_URL above, rather
+# than a hardcoded `clear:` value, since it'll change as Vercel domains do.
 env:
   secret:
     - SUPABASE_URL
     - SUPABASE_ANON_KEY
+    - SUPABASE_SERVICE_ROLE_KEY
+    - R2_ACCOUNT_ID
+    - R2_ACCESS_KEY_ID
+    - R2_SECRET_ACCESS_KEY
+    - R2_BUCKET_NAME
+    - ALLOWED_ORIGINS
 
 ssh:
   user: root
