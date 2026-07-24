@@ -1,5 +1,5 @@
 service: vastos-api
-image: ghcr.io/kavinram247/vastos-api
+image: kavinram247/vastos-api
 
 builder:
   arch: amd64
