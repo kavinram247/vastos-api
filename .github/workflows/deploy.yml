@@ -35,6 +35,7 @@ jobs:
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           ALLOWED_ORIGINS: ${{ secrets.ALLOWED_ORIGINS }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
           # R2_* omitted — see config/deploy.yml. Re-add these four env lines
           # (secrets already exist in the repo) when R2 goes back into env.secret.
         run: |

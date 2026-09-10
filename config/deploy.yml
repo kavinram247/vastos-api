@@ -41,6 +41,11 @@ env:
     - SUPABASE_ANON_KEY
     - SUPABASE_SERVICE_ROLE_KEY
     - ALLOWED_ORIGINS
+    # Direct Postgres for the /api/* data layer (Phase 5, item 2). Connects as
+    # the non-superuser `vastos_app` role over the private `kamal` network:
+    #   postgres://vastos_app:<pw>@vastos-api-postgres:5432/vastos
+    # The app boots without it (endpoints 503 until set).
+    - DATABASE_URL
 
 ssh:
   user: deploy
