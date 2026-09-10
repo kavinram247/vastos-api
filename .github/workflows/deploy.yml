@@ -26,7 +26,7 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan 167.233.124.12 >> ~/.ssh/known_hosts
+          ssh-keyscan 89.116.121.54 >> ~/.ssh/known_hosts
 
       - name: Deploy
         env:
@@ -34,11 +34,9 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
           ALLOWED_ORIGINS: ${{ secrets.ALLOWED_ORIGINS }}
+          # R2_* omitted — see config/deploy.yml. Re-add these four env lines
+          # (secrets already exist in the repo) when R2 goes back into env.secret.
         run: |
           kamal lock release || true
           kamal deploy
