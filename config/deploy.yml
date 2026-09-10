@@ -7,16 +7,14 @@ builder:
 servers:
   web:
     hosts:
-      - 167.233.124.12
+      - 89.116.121.54
 
 # kamal-proxy owns 80/443 on the server: health-checked container swap,
 # zero downtime, automatic rollback on failed health check, and its own
-# Let's Encrypt TLS. Caddy (used to prove DNS/TLS during Phase 02) must be
-# stopped before the first deploy or it'll conflict on the same ports:
-#   ssh root@167.233.124.12 "systemctl stop caddy && systemctl disable caddy"
+# Let's Encrypt TLS.
 proxy:
   ssl: true
-  host: arc.vastos.in
+  host: api.vastos.in
   app_port: 3000
   healthcheck:
     path: /health
@@ -29,19 +27,20 @@ registry:
   password:
     - KAMAL_REGISTRY_PASSWORD
 
-# ALLOWED_ORIGINS isn't sensitive, but goes through `secret:` (sourced from
-# the deploy environment / .kamal/secrets) same as SUPABASE_URL above, rather
-# than a hardcoded `clear:` value, since it'll change as Vercel domains do.
+# ALLOWED_ORIGINS isn't sensitive but goes through `secret:` (sourced from the
+# deploy environment / .kamal/secrets) rather than a hardcoded `clear:` value,
+# since it changes as Vercel domains do.
+#
+# R2_* deliberately omitted for now: DocumentsService builds its S3 client
+# lazily, so the app boots and serves everything except document upload/
+# download without them. Add the four R2_* vars back here (and export them)
+# when the documents feature is wired up / tested.
 env:
   secret:
     - SUPABASE_URL
     - SUPABASE_ANON_KEY
     - SUPABASE_SERVICE_ROLE_KEY
-    - R2_ACCOUNT_ID
-    - R2_ACCESS_KEY_ID
-    - R2_SECRET_ACCESS_KEY
-    - R2_BUCKET_NAME
     - ALLOWED_ORIGINS
 
 ssh:
-  user: root
+  user: deploy
