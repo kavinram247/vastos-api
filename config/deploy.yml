@@ -44,3 +44,36 @@ env:
 
 ssh:
   user: deploy
+
+# Accessories share the `kamal` Docker network. The app reaches them by
+# container name: `vastos-api-postgres:5432`, `vastos-api-minio:9000`.
+# Both publish ONLY to 127.0.0.1 on the host — never public. `kamal deploy`
+# does NOT manage these; boot/reboot them explicitly with `kamal accessory`.
+accessories:
+  postgres:
+    image: pgvector/pgvector:pg17
+    host: 89.116.121.54
+    port: "127.0.0.1:5432:5432"
+    env:
+      clear:
+        POSTGRES_USER: vastos
+        POSTGRES_DB: vastos
+      secret:
+        - POSTGRES_PASSWORD
+    volumes:
+      - /data/postgres:/var/lib/postgresql/data
+    cmd: "postgres -c shared_buffers=2GB -c effective_cache_size=8GB -c max_connections=100 -c shared_preload_libraries=pg_stat_statements"
+
+  minio:
+    image: minio/minio:latest
+    host: 89.116.121.54
+    port: "127.0.0.1:9000:9000"
+    cmd: "server /data"
+    env:
+      clear:
+        MINIO_ROOT_USER: vastos-files
+        MINIO_BROWSER: "off"
+      secret:
+        - MINIO_ROOT_PASSWORD
+    volumes:
+      - /data/minio:/data

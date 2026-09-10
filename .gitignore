@@ -8,3 +8,6 @@ coverage/
 
 .DS_Store
 *.log
+
+# Local-only: real secret values for `source .env.deploy` before kamal commands
+.env.deploy
