@@ -34,7 +34,9 @@ async function bootstrap() {
       }
       callback(new Error('Not allowed by CORS'));
     },
-    methods: ['GET', 'POST'],
+    // PATCH/DELETE added for the generic data layer (Phase 5, item 2.6) —
+    // bootstrap and document presigning only ever needed GET/POST.
+    methods: ['GET', 'POST', 'PATCH', 'DELETE'],
     allowedHeaders: ['Content-Type', 'Authorization'],
   });
 
