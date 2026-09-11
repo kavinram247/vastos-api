@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Param,
   Post,
   Query,
   Req,
@@ -9,7 +10,11 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { SupabaseAuthGuard } from '../auth/supabase-auth.guard';
-import { BoqService, type SaveBoqInput } from './boq.service';
+import {
+  BoqService,
+  type SaveBoqInput,
+  type SaveQuotationInput,
+} from './boq.service';
 
 type AuthedRequest = Request & { user: { id: string; email?: string } };
 
@@ -45,5 +50,20 @@ export class BoqController {
   async save(@Body() input: SaveBoqInput, @Req() req: AuthedRequest) {
     const id = await this.boq.saveBoq(req.user.id, input);
     return { id };
+  }
+
+  @Get('documents/:id/detail')
+  detail(@Param('id') id: string, @Req() req: AuthedRequest) {
+    return this.boq.fetchBoqDetail(req.user.id, id);
+  }
+
+  @Get('quotations')
+  quotations(@Req() req: AuthedRequest) {
+    return this.boq.listQuotations(req.user.id);
+  }
+
+  @Post('quotations')
+  saveQuotation(@Body() input: SaveQuotationInput, @Req() req: AuthedRequest) {
+    return this.boq.saveQuotation(req.user.id, input);
   }
 }

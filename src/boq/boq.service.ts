@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import type { PoolClient } from 'pg';
 import { DatabaseService } from '../db/database.service';
 
@@ -85,6 +85,60 @@ interface RegionIndicesRow {
   labour_index: string;
   logistics_index: string;
   availability_risk: string;
+}
+
+export interface BoqDetailLinePayload {
+  id: string;
+  description: string;
+  uom: string;
+  quantity: number;
+  rate: number;
+  cost_price: number;
+  selling_price: number;
+  margin_pct: number | null;
+  gst_rate: number;
+  product_id: string | null;
+  sku_id: string | null;
+  labour_activity_id: string | null;
+  is_optional: boolean;
+}
+
+export interface BoqDetailPayload {
+  id: string;
+  title: string;
+  status: string;
+  region_id: string | null;
+  sections: Array<{ id: string; name: string; lines: BoqDetailLinePayload[] }>;
+}
+
+export interface SaveQuotationInput {
+  boqId: string;
+  boqVersion?: number;
+  docType: 'customer' | 'internal_costing' | 'procurement' | 'vendor_rfq';
+  design_fees?: number;
+  supervision_fees?: number;
+  other_charges?: number;
+  discount_pct?: number;
+  subtotal: number;
+  gst_amount: number;
+  total_amount: number;
+  snapshot: unknown;
+}
+
+export interface SavedQuotation {
+  id: string;
+  quotation_number: string;
+  share_token: string;
+}
+
+export interface QuotationListRow {
+  id: string;
+  quotation_number: string;
+  doc_type: string;
+  total_amount: string;
+  status: string;
+  created_at: string;
+  boq_id: string | null;
 }
 
 export interface SaveBoqInput {
@@ -417,5 +471,154 @@ export class BoqService {
        values (current_firm_id(), $1, 1, $2, $3, 'Initial generation')`,
       [boqId, JSON.stringify(input.sections), JSON.stringify(input.totals)],
     );
+  }
+
+  // ── Quotations (src/boq/quotationApi.ts) ──────────────────────────────────
+  // The public/unauthenticated share-and-accept flow (quote_public_view /
+  // accept_quote, called by anon via share_token — no login at all) is NOT
+  // covered here; it's a different auth model from everything else in this
+  // service (no bearer token, no current_firm_id()) and stays on
+  // supabase-js/PostgREST for now. See Vastos_ARC's quoteShareApi.ts.
+
+  async fetchBoqDetail(
+    authUid: string,
+    boqId: string,
+  ): Promise<BoqDetailPayload> {
+    return this.db.withCaller(authUid, async (client) => {
+      const doc = await client.query<{
+        id: string;
+        title: string;
+        status: string;
+        region_id: string | null;
+      }>(
+        `select id, title, status, region_id from boq_documents where id = $1 limit 1`,
+        [boqId],
+      );
+      const row = doc.rows[0];
+      if (!row) throw new NotFoundException(`boq_documents/${boqId} not found`);
+
+      const sections = await client.query<{
+        id: string;
+        name: string;
+        order_index: number;
+      }>(
+        `select id, name, order_index from boq_sections where boq_id = $1 order by order_index`,
+        [boqId],
+      );
+      const lines = await client.query<{
+        id: string;
+        section_id: string;
+        description: string;
+        uom: string;
+        quantity: string;
+        rate: string;
+        cost_price: string;
+        selling_price: string;
+        margin_pct: string | null;
+        gst_rate: string;
+        product_id: string | null;
+        sku_id: string | null;
+        labour_activity_id: string | null;
+        is_optional: boolean;
+      }>(
+        `select id, section_id, description, uom, quantity, rate, cost_price, selling_price,
+                margin_pct, gst_rate, product_id, sku_id, labour_activity_id, is_optional
+           from boq_line_items
+          where boq_id = $1
+          order by order_index`,
+        [boqId],
+      );
+
+      const bySection = new Map<
+        string,
+        BoqDetailPayload['sections'][number]['lines']
+      >();
+      for (const l of lines.rows) {
+        const arr = bySection.get(l.section_id) ?? [];
+        arr.push({
+          id: l.id,
+          description: l.description,
+          uom: l.uom,
+          quantity: Number(l.quantity),
+          rate: Number(l.rate),
+          cost_price: Number(l.cost_price),
+          selling_price: Number(l.selling_price),
+          margin_pct: l.margin_pct == null ? null : Number(l.margin_pct),
+          gst_rate: Number(l.gst_rate),
+          product_id: l.product_id,
+          sku_id: l.sku_id,
+          labour_activity_id: l.labour_activity_id,
+          is_optional: l.is_optional,
+        });
+        bySection.set(l.section_id, arr);
+      }
+
+      return {
+        id: row.id,
+        title: row.title,
+        status: row.status,
+        region_id: row.region_id,
+        sections: sections.rows.map((s) => ({
+          id: s.id,
+          name: s.name,
+          lines: bySection.get(s.id) ?? [],
+        })),
+      };
+    });
+  }
+
+  async saveQuotation(
+    authUid: string,
+    input: SaveQuotationInput,
+  ): Promise<SavedQuotation> {
+    return this.db.withCaller(authUid, async (client) => {
+      // Same numbering scheme as before (QT-<year>-<count+1>), but now
+      // computed and inserted in the same transaction — the old code did the
+      // count and the insert as two separate round trips.
+      const { rows: countRows } = await client.query<{ count: string }>(
+        `select count(*) from quotations where firm_id = current_firm_id()`,
+      );
+      const year = new Date().getFullYear();
+      const number = `QT-${year}-${String(Number(countRows[0].count) + 1).padStart(3, '0')}`;
+
+      const { rows } = await client.query<SavedQuotation>(
+        `insert into quotations
+           (firm_id, boq_id, boq_version, doc_type, quotation_number, version,
+            design_fees, supervision_fees, other_charges, discount_pct,
+            subtotal, gst_amount, total_amount, status, snapshot)
+         values
+           (current_firm_id(), $1, $2, $3, $4, 1,
+            $5, $6, $7, $8,
+            $9, $10, $11, 'draft', $12)
+         returning id, quotation_number, share_token`,
+        [
+          input.boqId,
+          input.boqVersion ?? 1,
+          input.docType,
+          number,
+          input.design_fees ?? 0,
+          input.supervision_fees ?? 0,
+          input.other_charges ?? 0,
+          input.discount_pct ?? 0,
+          input.subtotal,
+          input.gst_amount,
+          input.total_amount,
+          JSON.stringify(input.snapshot),
+        ],
+      );
+      return rows[0];
+    });
+  }
+
+  listQuotations(authUid: string): Promise<QuotationListRow[]> {
+    return this.db.withCaller(authUid, async (client) => {
+      const { rows } = await client.query<QuotationListRow>(
+        `select id, quotation_number, doc_type, total_amount, status, created_at, boq_id
+           from quotations
+          where firm_id = current_firm_id()
+          order by created_at desc`,
+      );
+      return rows;
+    });
   }
 }
