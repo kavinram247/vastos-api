@@ -106,6 +106,77 @@ export const TABLE_REGISTRY: Record<string, TableSpec> = {
   ),
 };
 
+// Tasks module (Phase 5, item 2.9). assignee_id/created_by_id/actor_id are
+// plain text, not profiles FKs — the task system predates full Supabase auth
+// for non-owner staff and intentionally accepts a client-supplied identity
+// for these fields (unlike firm_id, which RLS still independently enforces).
+TABLE_REGISTRY.tasks = spec(
+  [
+    'id',
+    'firm_id',
+    'title',
+    'description',
+    'assignee_id',
+    'assignee_name',
+    'created_by_id',
+    'created_by_name',
+    'project_id',
+    'project_name',
+    'status',
+    'priority',
+    'start_date',
+    'due_date',
+    'reminder_at',
+    'repeat',
+    'tags',
+    'notes',
+    'attachments',
+    'list_id',
+    'link_type',
+    'link_id',
+    'link_label',
+    'is_followup',
+    'progress',
+    'order_index',
+    'archived_at',
+    'created_at',
+    'updated_at',
+    'completed_at',
+  ],
+);
+TABLE_REGISTRY.task_lists = spec([
+  'id',
+  'firm_id',
+  'name',
+  'color',
+  'icon',
+  'order_index',
+  'created_by',
+  'created_at',
+]);
+TABLE_REGISTRY.task_subtasks = spec([
+  'id',
+  'firm_id',
+  'task_id',
+  'title',
+  'done',
+  'order_index',
+  'created_at',
+]);
+TABLE_REGISTRY.task_activity = spec([
+  'id',
+  'firm_id',
+  'task_id',
+  'actor_id',
+  'actor_name',
+  'kind',
+  'detail',
+  'created_at',
+]);
+// task_assign_privileges is NOT registered here — setAssignPrivilege needs
+// upsert-on-conflict(firm_id,user_id) semantics the generic writer doesn't
+// have, so it's served by two small dedicated endpoints in src/tasks/ instead.
+
 export function getTableSpec(table: string): TableSpec {
   const spec = TABLE_REGISTRY[table];
   if (!spec) {

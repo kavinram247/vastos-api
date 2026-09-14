@@ -59,7 +59,9 @@ export class TableWriterService {
     return rows[0];
   }
 
-  /** Update every row matching `match` (an AND of equality filters). */
+  /** Update every row matching `match` (an AND of equality filters). An
+   * array value means "column = ANY(array)" (an IN-list) instead of plain
+   * equality — e.g. the multi-select bulk actions on the Tasks page. */
   async updateWhere(
     client: PoolClient,
     table: string,
@@ -79,7 +81,10 @@ export class TableWriterService {
       .map((c, i) => `${assertIdent(c)} = $${i + 1}`)
       .join(', ');
     const whereList = matchCols
-      .map((c, i) => `${assertIdent(c)} = $${patchCols.length + i + 1}`)
+      .map((c, i) => {
+        const op = Array.isArray(match[c]) ? '= ANY' : '=';
+        return `${assertIdent(c)} ${op} ($${patchCols.length + i + 1})`;
+      })
       .join(' and ');
     const values = [
       ...patchCols.map((c) => patch[c]),
