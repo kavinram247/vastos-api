@@ -1,6 +1,12 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import type { PoolClient } from 'pg';
 import { DatabaseService } from '../db/database.service';
+import {
+  computeCalibration,
+  overallAccuracy,
+  type Calibration,
+  type VarianceRow,
+} from './calibration-engine';
 
 // ── JSON-friendly mirrors of the frontend's src/boq/engine/estimator.ts types ─
 // The frontend reconstructs Maps from these plain arrays/objects — see
@@ -139,6 +145,50 @@ export interface QuotationListRow {
   status: string;
   created_at: string;
   boq_id: string | null;
+}
+
+// ── Calibration payload types (mirror src/boq/calibrationApi.ts exactly —
+// these are consumed with zero reshaping on the frontend, same as bootstrap
+// and pricing-context). ────────────────────────────────────────────────────
+type VarianceRowPayload = VarianceRow;
+
+export interface ProductVarianceRow {
+  product_id: string;
+  name: string;
+  base_uom: string;
+  waste_factor: number;
+  standard_sku_id: string | null;
+  current_rate: number | null;
+  sample_size: number;
+  calib: Calibration | null;
+}
+
+export interface VarianceSummaryPayload {
+  products: ProductVarianceRow[];
+  accuracy: number;
+  total_samples: number;
+  projects: number;
+}
+
+export interface CalibrationResultRow {
+  product: string;
+  waste_old: number;
+  waste_new: number;
+  rate_old: number | null;
+  rate_new: number | null;
+}
+
+export interface CalibrationHistoryRow {
+  metric: string;
+  old_value: number;
+  new_value: number;
+  sample_size: number;
+  run_at: string;
+  product: string;
+}
+
+function numOrNull(v: string | null): number | null {
+  return v == null ? null : Number(v);
 }
 
 export interface SaveBoqInput {
@@ -619,6 +669,280 @@ export class BoqService {
           order by created_at desc`,
       );
       return rows;
+    });
+  }
+
+  // ── Calibration (src/boq/calibrationApi.ts) ───────────────────────────────
+
+  fetchVarianceSummary(authUid: string): Promise<VarianceSummaryPayload> {
+    return this.db.withCaller(authUid, (client) =>
+      this.varianceSummary(client),
+    );
+  }
+
+  private async varianceSummary(
+    client: PoolClient,
+  ): Promise<VarianceSummaryPayload> {
+    const variance = await client.query<{
+      product_id: string;
+      project_id: string | null;
+      estimated_qty: string | null;
+      actual_qty: string | null;
+      estimated_rate: string | null;
+      actual_rate: string | null;
+      estimated_cost: string | null;
+      actual_cost: string | null;
+    }>(
+      `select product_id, project_id, estimated_qty, actual_qty, estimated_rate,
+              actual_rate, estimated_cost, actual_cost
+         from boq_actual_variance
+        where firm_id = current_firm_id()`,
+    );
+    const products = await client.query<{
+      id: string;
+      name: string;
+      base_uom: string;
+      waste_factor: string;
+    }>(
+      `select id, name, base_uom, waste_factor from catalog_products_effective`,
+    );
+    const skus = await client.query<{
+      id: string;
+      product_id: string;
+      quality_grade: string;
+    }>(`select id, product_id, quality_grade from product_skus`);
+    const rates = await client.query<{ sku_id: string; rate: string }>(
+      `select sku_id, rate
+         from rate_cards
+        where firm_id = current_firm_id() and region_id is null and sku_id is not null
+        order by valid_from desc`,
+    );
+
+    const prodMeta = new Map(products.rows.map((p) => [p.id, p]));
+    const stdSku = new Map<string, string>();
+    for (const s of skus.rows) {
+      if (s.quality_grade === 'standard' && !stdSku.has(s.product_id)) {
+        stdSku.set(s.product_id, s.id);
+      }
+    }
+    const latestRate = new Map<string, number>();
+    for (const r of rates.rows) {
+      if (!latestRate.has(r.sku_id)) latestRate.set(r.sku_id, Number(r.rate));
+    }
+
+    const byProduct = new Map<string, VarianceRowPayload[]>();
+    const projectIds = new Set<string>();
+    for (const v of variance.rows) {
+      if (v.project_id) projectIds.add(v.project_id);
+      const arr = byProduct.get(v.product_id) ?? [];
+      arr.push({
+        estimated_qty: numOrNull(v.estimated_qty),
+        actual_qty: numOrNull(v.actual_qty),
+        estimated_rate: numOrNull(v.estimated_rate),
+        actual_rate: numOrNull(v.actual_rate),
+        estimated_cost: numOrNull(v.estimated_cost),
+        actual_cost: numOrNull(v.actual_cost),
+      });
+      byProduct.set(v.product_id, arr);
+    }
+
+    const out: ProductVarianceRow[] = [];
+    const allRows: VarianceRowPayload[] = [];
+    for (const [pid, rows] of byProduct) {
+      const meta = prodMeta.get(pid);
+      if (!meta) continue;
+      allRows.push(...rows);
+      const wasteFactor = Number(meta.waste_factor);
+      const sku = stdSku.get(pid) ?? null;
+      out.push({
+        product_id: pid,
+        name: meta.name,
+        base_uom: meta.base_uom,
+        waste_factor: wasteFactor,
+        standard_sku_id: sku,
+        current_rate: sku ? (latestRate.get(sku) ?? null) : null,
+        sample_size: rows.length,
+        calib: computeCalibration(rows, wasteFactor),
+      });
+    }
+    out.sort(
+      (a, b) =>
+        Math.abs(b.calib?.mean_variance_pct ?? 0) -
+        Math.abs(a.calib?.mean_variance_pct ?? 0),
+    );
+
+    return {
+      products: out,
+      accuracy: overallAccuracy(allRows),
+      total_samples: allRows.length,
+      projects: projectIds.size,
+    };
+  }
+
+  async runCalibration(
+    authUid: string,
+    regionId: string | null,
+  ): Promise<CalibrationResultRow[]> {
+    return this.db.withCaller(authUid, async (client) => {
+      // createdBy resolved from the verified session, not a client-supplied
+      // value — same principle as current_firm_id() everywhere else here.
+      const { rows: meRows } = await client.query<{ id: string }>(
+        `select id from profiles where auth_uid = $1 limit 1`,
+        [authUid],
+      );
+      const createdBy = meRows[0]?.id ?? null;
+
+      const summary = await this.varianceSummary(client);
+      const results: CalibrationResultRow[] = [];
+      const today = new Date().toISOString().slice(0, 10);
+
+      for (const p of summary.products) {
+        const calib = p.calib;
+        if (!calib || calib.sample_size < 3) continue;
+
+        const wasteChanged =
+          Math.abs(calib.waste_new - calib.waste_old) > 0.0005;
+        const rateNew =
+          p.current_rate != null
+            ? Math.round(p.current_rate * calib.rate_multiplier * 100) / 100
+            : null;
+        const rateChanged =
+          rateNew != null && Math.abs(rateNew - (p.current_rate ?? 0)) > 0.01;
+        if (!wasteChanged && !rateChanged) continue;
+
+        if (wasteChanged) {
+          // H2b: calibration is per-firm by definition, so this writes a
+          // per-firm override rather than the shared catalogue row every
+          // other firm prices from — same RPC the frontend called directly.
+          await client.query(
+            `select catalog_product_override_set($1, $2::jsonb)`,
+            [p.product_id, JSON.stringify({ waste_factor: calib.waste_new })],
+          );
+          await client.query(
+            `insert into calibration_runs
+               (firm_id, product_id, region_id, metric, old_value, new_value, sample_size, damping)
+             values (current_firm_id(), $1, $2, 'waste_factor', $3, $4, $5, 0.3)`,
+            [
+              p.product_id,
+              regionId,
+              calib.waste_old,
+              calib.waste_new,
+              calib.sample_size,
+            ],
+          );
+        }
+        if (rateChanged && p.standard_sku_id) {
+          await client.query(
+            `insert into rate_cards
+               (firm_id, sku_id, region_id, rate, valid_from, source, created_by)
+             values (current_firm_id(), $1, $2, $3, $4, 'calibrated', $5)`,
+            [p.standard_sku_id, regionId, rateNew, today, createdBy],
+          );
+          await client.query(
+            `insert into calibration_runs
+               (firm_id, product_id, region_id, metric, old_value, new_value, sample_size, damping)
+             values (current_firm_id(), $1, $2, 'rate_index', $3, $4, $5, 0.3)`,
+            [
+              p.product_id,
+              regionId,
+              p.current_rate,
+              rateNew,
+              calib.sample_size,
+            ],
+          );
+        }
+        results.push({
+          product: p.name,
+          waste_old: calib.waste_old,
+          waste_new: calib.waste_new,
+          rate_old: p.current_rate,
+          rate_new: rateChanged ? rateNew : p.current_rate,
+        });
+      }
+      return results;
+    });
+  }
+
+  fetchCalibrationHistory(authUid: string): Promise<CalibrationHistoryRow[]> {
+    return this.db.withCaller(authUid, async (client) => {
+      const { rows } = await client.query<{
+        metric: string;
+        old_value: string;
+        new_value: string;
+        sample_size: number;
+        run_at: string;
+        product_name: string | null;
+      }>(
+        `select cr.metric, cr.old_value, cr.new_value, cr.sample_size, cr.run_at,
+                cp.name as product_name
+           from calibration_runs cr
+           left join catalog_products cp on cp.id = cr.product_id
+          where cr.firm_id = current_firm_id()
+          order by cr.run_at desc
+          limit 40`,
+      );
+      return rows.map((r) => ({
+        metric: r.metric,
+        old_value: Number(r.old_value),
+        new_value: Number(r.new_value),
+        sample_size: r.sample_size,
+        run_at: r.run_at,
+        product: r.product_name ?? '—',
+      }));
+    });
+  }
+
+  /** Reconcile a completed BOQ: write estimated-vs-actual rows. For the demo,
+   * if no actuals exist yet, synthesize plausible ones from the BOQ's own
+   * lines first (mirrors the frontend's original dev/demo synthesizer). */
+  async reconcileBoqFromActuals(
+    authUid: string,
+    boqId: string,
+    regionId: string | null,
+  ): Promise<number> {
+    const detail = await this.fetchBoqDetail(authUid, boqId);
+    const matLines = detail.sections
+      .flatMap((s) => s.lines)
+      .filter((l) => l.product_id && !l.labour_activity_id);
+    if (matLines.length === 0) return 0;
+
+    return this.db.withCaller(authUid, async (client) => {
+      let inserted = 0;
+      for (const l of matLines) {
+        const drift = 1 + (Math.random() * 0.18 - 0.04); // -4%..+14%
+        const actualQty = Math.round(l.quantity * drift * 1000) / 1000;
+        const actualRate =
+          Math.round(l.rate * (1 + (Math.random() * 0.06 - 0.02)) * 100) / 100;
+        const actualCost = Math.round(actualQty * actualRate * 100) / 100;
+        // PRE-EXISTING BUG, ported unchanged: boq_actual_variance.project_id is
+        // NOT NULL with no default, and neither this function nor saveBoq ever
+        // had a real project id to supply — the frontend always sent `null`
+        // too, so this insert has presumably always thrown here. Not fixing
+        // silently: the right fix (thread a real project_id through
+        // BoqEstimatorPage -> saveBoq -> boq_documents.project_id -> here, or
+        // add a projectId param to this endpoint) is a product decision, not
+        // a migration detail. Flagged to the user.
+        await client.query(
+          `insert into boq_actual_variance
+             (firm_id, boq_line_id, project_id, region_id, product_id,
+              estimated_qty, actual_qty, estimated_rate, actual_rate, estimated_cost, actual_cost)
+           values (current_firm_id(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+          [
+            l.id,
+            null,
+            regionId,
+            l.product_id,
+            l.quantity,
+            actualQty,
+            l.rate,
+            actualRate,
+            l.cost_price,
+            actualCost,
+          ],
+        );
+        inserted++;
+      }
+      return inserted;
     });
   }
 }

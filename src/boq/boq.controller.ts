@@ -66,4 +66,36 @@ export class BoqController {
   saveQuotation(@Body() input: SaveQuotationInput, @Req() req: AuthedRequest) {
     return this.boq.saveQuotation(req.user.id, input);
   }
+
+  @Get('calibration/variance-summary')
+  varianceSummary(@Req() req: AuthedRequest) {
+    return this.boq.fetchVarianceSummary(req.user.id);
+  }
+
+  @Post('calibration/run')
+  runCalibration(
+    @Body() body: { regionId: string | null },
+    @Req() req: AuthedRequest,
+  ) {
+    return this.boq.runCalibration(req.user.id, body.regionId ?? null);
+  }
+
+  @Get('calibration/history')
+  calibrationHistory(@Req() req: AuthedRequest) {
+    return this.boq.fetchCalibrationHistory(req.user.id);
+  }
+
+  @Post('documents/:id/reconcile')
+  async reconcile(
+    @Param('id') id: string,
+    @Body() body: { regionId: string | null },
+    @Req() req: AuthedRequest,
+  ) {
+    const count = await this.boq.reconcileBoqFromActuals(
+      req.user.id,
+      id,
+      body.regionId ?? null,
+    );
+    return { count };
+  }
 }
