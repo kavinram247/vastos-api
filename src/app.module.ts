@@ -12,6 +12,7 @@ import { BoqModule } from './boq/boq.module';
 import { TasksModule } from './tasks/tasks.module';
 import { AttendanceModule } from './attendance/attendance.module';
 import { MarketingModule } from './marketing/marketing.module';
+import { InventoryModule } from './inventory/inventory.module';
 
 @Module({
   imports: [
@@ -28,6 +29,7 @@ import { MarketingModule } from './marketing/marketing.module';
     TasksModule,
     AttendanceModule,
     MarketingModule,
+    InventoryModule,
   ],
 })
 export class AppModule {}
