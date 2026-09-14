@@ -10,6 +10,8 @@ import { DataModule } from './data/data.module';
 import { LeadsModule } from './leads/leads.module';
 import { BoqModule } from './boq/boq.module';
 import { TasksModule } from './tasks/tasks.module';
+import { AttendanceModule } from './attendance/attendance.module';
+import { MarketingModule } from './marketing/marketing.module';
 
 @Module({
   imports: [
@@ -24,6 +26,8 @@ import { TasksModule } from './tasks/tasks.module';
     LeadsModule,
     BoqModule,
     TasksModule,
+    AttendanceModule,
+    MarketingModule,
   ],
 })
 export class AppModule {}

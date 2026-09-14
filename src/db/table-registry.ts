@@ -177,6 +177,31 @@ TABLE_REGISTRY.task_activity = spec([
 // upsert-on-conflict(firm_id,user_id) semantics the generic writer doesn't
 // have, so it's served by two small dedicated endpoints in src/tasks/ instead.
 
+// Attendance module (Phase 5, item 2.10). Only the columns actually written
+// through this generic layer are listed — checkIn/saveManualAttendance are
+// upserts (not supported here) and live in src/attendance/ instead.
+TABLE_REGISTRY.attendance_records = spec([
+  'id',
+  'firm_id',
+  'check_out_at',
+  'check_out_lat',
+  'check_out_lng',
+  'check_out_accuracy',
+  'check_out_label',
+  'updated_at',
+]);
+
+// Marketing module (Phase 5, item 2.10). Only the columns setAccountStatus/
+// setSyncInterval actually write — every read and the sync-run insert go
+// through src/marketing/ instead (multi-table assembly / two-write transaction).
+TABLE_REGISTRY.crm_ad_accounts = spec([
+  'id',
+  'firm_id',
+  'status',
+  'sync_interval_minutes',
+  'updated_at',
+]);
+
 export function getTableSpec(table: string): TableSpec {
   const spec = TABLE_REGISTRY[table];
   if (!spec) {
