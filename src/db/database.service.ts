@@ -5,7 +5,20 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Pool, type PoolClient } from 'pg';
+import { Pool, types, type PoolClient } from 'pg';
+
+// node-postgres parses a `date` column into a JS Date at UTC midnight by
+// default, which then serializes (via Date#toJSON in Nest's res.json) as a
+// full timestamp — "2026-09-14T00:00:00.000Z" — not the "2026-09-14" string
+// PostgREST used to send, that every frontend interface documents/expects
+// (tasks.start_date/due_date, attendance_records.work_date, ...). Return the
+// raw wire text instead (already "YYYY-MM-DD" in Postgres's text format) —
+// this is pg's own documented fix, applied once, globally, for every query,
+// rather than needing an explicit ::text cast on every date column forever.
+// timestamp/timestamptz columns are untouched and keep parsing to Date (they
+// SHOULD serialize as full ISO strings — that's what every interface expects
+// for created_at/updated_at/etc).
+types.setTypeParser(types.builtins.DATE, (value: string) => value);
 
 /**
  * Direct Postgres access for the `/api/*` layer that replaces PostgREST.

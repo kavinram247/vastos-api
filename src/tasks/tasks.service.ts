@@ -9,7 +9,8 @@ import { DatabaseService } from '../db/database.service';
  * have. Every other write (tasks/task_lists/task_subtasks/task_activity
  * insert/update/delete) goes through /api/data/:table instead — see
  * db/table-registry.ts. `select *` is safe here (no numeric columns needing
- * Number() coercion, unlike BOQ's rate/amount columns).
+ * Number() coercion, unlike BOQ's rate/amount columns; date columns —
+ * start_date/due_date — are handled globally in database.service.ts).
  */
 @Injectable()
 export class TasksService {
