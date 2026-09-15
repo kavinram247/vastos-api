@@ -202,6 +202,33 @@ TABLE_REGISTRY.crm_ad_accounts = spec([
   'updated_at',
 ]);
 
+// Purchase Management module (Phase 5, item 2.12). Only project_stock (plain
+// CRUD, no generated fields, no FK needing a server-side resolution) goes
+// through this layer. `vendors` looked like the same shape (list/save/
+// delete, no generated number) but its `created_by` is a uuid FK to
+// `profiles.id` — a different id space than the `userId` (crm_profiles.id,
+// text) the frontend actually holds — so it needs the same server-side
+// `select id from profiles where auth_uid = $1` resolution BOQ's own,
+// already-shipped vendor writes use (boq-vendor.service.ts); that can't be
+// expressed by this generic, no-per-column-logic layer, so vendors stays
+// bespoke in src/purchase/purchase-masters.service.ts instead. Purchase
+// orders/requests/RFQs/work orders all need a server-computed document
+// number (PO-2026-012 etc.) or multi-row child replace-on-save, so they're
+// bespoke services too.
+TABLE_REGISTRY.project_stock = spec([
+  'id',
+  'firm_id',
+  'project_id',
+  'material_id',
+  'material_name',
+  'uom',
+  'current_stock',
+  'reorder_level',
+  'last_updated',
+  'last_po_id',
+  'updated_at',
+]);
+
 export function getTableSpec(table: string): TableSpec {
   const spec = TABLE_REGISTRY[table];
   if (!spec) {
