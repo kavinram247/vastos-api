@@ -4,6 +4,7 @@ import type { Request } from 'express';
 import { DocumentsController } from './documents.controller';
 import { DocumentsService } from './documents.service';
 import { CallerContextService } from '../auth/caller-context.service';
+import { DatabaseService } from '../db/database.service';
 import { SupabaseService } from '../supabase/supabase.service';
 
 type AuthedRequest = Request & { user: { id: string; email?: string } };
@@ -14,33 +15,27 @@ const REQ = {
 
 type Row = Record<string, unknown> | null;
 
-interface MockQuery {
-  select: (columns: string) => MockQuery;
-  eq: (column: string, value: string) => MockQuery;
-  maybeSingle: () => Promise<{ data: Row; error: null }>;
-}
-
-function makeSupabase(row: Row): SupabaseService {
-  const query: MockQuery = {
-    select: () => query,
-    eq: () => query,
-    maybeSingle: () => Promise.resolve({ data: row, error: null }),
-  };
+function makeDb(row: Row): DatabaseService {
   return {
-    getServiceRoleClient: () => ({ from: () => query }),
-  } as unknown as SupabaseService;
+    withServiceRole: (fn: (client: unknown) => Promise<unknown>) =>
+      fn({ query: async () => ({ rows: row ? [row] : [] }) }),
+  } as unknown as DatabaseService;
 }
 
 async function build(
   callerContext: Partial<CallerContextService>,
-  supabase: SupabaseService,
+  db: DatabaseService,
   documents: Partial<DocumentsService> = {},
 ) {
   const moduleRef = await Test.createTestingModule({
     controllers: [DocumentsController],
     providers: [
       { provide: CallerContextService, useValue: callerContext },
-      { provide: SupabaseService, useValue: supabase },
+      { provide: DatabaseService, useValue: db },
+      // SupabaseAuthGuard (attached via @UseGuards) still needs this in the
+      // DI graph to construct, even though these tests call controller
+      // methods directly and never trigger the guard itself.
+      { provide: SupabaseService, useValue: {} },
       {
         provide: DocumentsService,
         useValue: {
@@ -60,7 +55,7 @@ describe('DocumentsController', () => {
     it('403s when caller context is null (no matching profile)', async () => {
       const controller = await build(
         { resolve: () => Promise.resolve(null) },
-        makeSupabase(null),
+        makeDb(null),
       );
       await expect(
         controller.presignUpload(
@@ -81,7 +76,7 @@ describe('DocumentsController', () => {
               isReadOnlyViewer: true,
             }),
         },
-        makeSupabase({ id: 'project-1' }),
+        makeDb({ id: 'project-1' }),
       );
       await expect(
         controller.presignUpload(
@@ -102,7 +97,7 @@ describe('DocumentsController', () => {
               isReadOnlyViewer: false,
             }),
         },
-        makeSupabase(null),
+        makeDb(null),
       );
       await expect(
         controller.presignUpload(
@@ -123,7 +118,7 @@ describe('DocumentsController', () => {
               isReadOnlyViewer: false,
             }),
         },
-        makeSupabase({ id: 'project-1' }),
+        makeDb({ id: 'project-1' }),
       );
       const result = await controller.presignUpload(
         'project-1',
@@ -149,7 +144,7 @@ describe('DocumentsController', () => {
               isReadOnlyViewer: false,
             }),
         },
-        makeSupabase(null),
+        makeDb(null),
       );
       await expect(
         controller.presignDownload('doc-1', 'inline', REQ),
@@ -166,7 +161,7 @@ describe('DocumentsController', () => {
               isReadOnlyViewer: true,
             }),
         },
-        makeSupabase({
+        makeDb({
           file_url: 'firm-1/project-1/uuid',
           name: 'contract.pdf',
           visible_to_client: false,
@@ -187,7 +182,7 @@ describe('DocumentsController', () => {
               isReadOnlyViewer: false,
             }),
         },
-        makeSupabase({
+        makeDb({
           file_url: '#',
           name: 'legacy.pdf',
           visible_to_client: true,
@@ -208,7 +203,7 @@ describe('DocumentsController', () => {
               isReadOnlyViewer: true,
             }),
         },
-        makeSupabase({
+        makeDb({
           file_url: 'firm-1/project-1/uuid',
           name: 'contract.pdf',
           visible_to_client: true,

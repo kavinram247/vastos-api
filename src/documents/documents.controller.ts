@@ -14,7 +14,7 @@ import {
 import type { Request } from 'express';
 import { SupabaseAuthGuard } from '../auth/supabase-auth.guard';
 import { CallerContextService } from '../auth/caller-context.service';
-import { SupabaseService } from '../supabase/supabase.service';
+import { DatabaseService } from '../db/database.service';
 import { DocumentsService } from './documents.service';
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
@@ -31,7 +31,7 @@ export class DocumentsController {
   constructor(
     private readonly documents: DocumentsService,
     private readonly callerContext: CallerContextService,
-    private readonly supabase: SupabaseService,
+    private readonly db: DatabaseService,
   ) {}
 
   @Post(':projectId/presign-upload')
@@ -54,13 +54,13 @@ export class DocumentsController {
       throw new BadRequestException('File exceeds 25MB limit');
     }
 
-    const db = this.supabase.getServiceRoleClient();
-    const { data: project } = await db
-      .from('crm_projects')
-      .select('id')
-      .eq('id', projectId)
-      .eq('firm_id', ctx.firmId)
-      .maybeSingle();
+    const project = await this.db.withServiceRole(async (client) => {
+      const { rows } = await client.query(
+        `select id from crm_projects where id = $1 and firm_id = $2 limit 1`,
+        [projectId, ctx.firmId],
+      );
+      return rows[0] ?? null;
+    });
     if (!project) throw new NotFoundException('Project not found');
 
     const objectKey = this.documents.buildObjectKey(ctx.firmId, projectId);
@@ -80,20 +80,19 @@ export class DocumentsController {
     const ctx = await this.callerContext.resolve(req.user);
     if (!ctx) throw new ForbiddenException();
 
-    const db = this.supabase.getServiceRoleClient();
-    const { data: doc } = await db
-      .from('crm_project_documents')
-      .select('file_url,name,visible_to_client')
-      .eq('id', documentId)
-      .eq('firm_id', ctx.firmId)
-      .maybeSingle();
-    if (!doc) throw new NotFoundException('Document not found');
-
-    const row = doc as {
-      file_url: string;
-      name: string;
-      visible_to_client: boolean;
-    };
+    const row = await this.db.withServiceRole(async (client) => {
+      const { rows } = await client.query<{
+        file_url: string;
+        name: string;
+        visible_to_client: boolean;
+      }>(
+        `select file_url, name, visible_to_client from crm_project_documents
+          where id = $1 and firm_id = $2 limit 1`,
+        [documentId, ctx.firmId],
+      );
+      return rows[0] ?? null;
+    });
+    if (!row) throw new NotFoundException('Document not found');
     // 404, not 403 — don't confirm existence to someone who shouldn't see it.
     if (ctx.isReadOnlyViewer && !row.visible_to_client) {
       throw new NotFoundException('Document not found');
