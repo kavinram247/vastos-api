@@ -15,6 +15,7 @@ import { MarketingModule } from './marketing/marketing.module';
 import { InventoryModule } from './inventory/inventory.module';
 import { PurchaseModule } from './purchase/purchase.module';
 import { VendorAccessModule } from './vendor-access/vendor-access.module';
+import { InvitesModule } from './invites/invites.module';
 
 @Module({
   imports: [
@@ -34,6 +35,7 @@ import { VendorAccessModule } from './vendor-access/vendor-access.module';
     InventoryModule,
     PurchaseModule,
     VendorAccessModule,
+    InvitesModule,
   ],
 })
 export class AppModule {}
