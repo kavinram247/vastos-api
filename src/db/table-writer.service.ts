@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import type { PoolClient, QueryResultRow } from 'pg';
-import { assertIdent, getTableSpec } from './table-registry';
+import { JSONB_COLUMNS, assertIdent, getTableSpec } from './table-registry';
 
 /**
  * Generic, RLS-scoped CRUD over the tables listed in table-registry.ts — the
@@ -11,7 +11,8 @@ import { assertIdent, getTableSpec } from './table-registry';
  *
  * Table/column names are validated against the registry BEFORE interpolation
  * (SQL doesn't let you parameterize identifiers); values are always sent as
- * query parameters, never string-built.
+ * query parameters, never string-built. Values bound for a jsonb column are
+ * JSON-encoded and cast (see JSONB_COLUMNS) — PostgREST did that implicitly.
  */
 @Injectable()
 export class TableWriterService {
@@ -26,8 +27,10 @@ export class TableWriterService {
     if (cols.length === 0) throw new BadRequestException('empty row');
 
     const colList = cols.map(assertIdent).join(', ');
-    const placeholders = cols.map((_, i) => `$${i + 1}`).join(', ');
-    const values = cols.map((c) => row[c]);
+    const placeholders = cols
+      .map((c, i) => this.placeholder(table, c, i + 1))
+      .join(', ');
+    const values = cols.map((c) => this.bindValue(table, c, row[c]));
 
     const { rows } = await client.query<T>(
       `insert into ${assertIdent(table)} (${colList}) values (${placeholders}) returning *`,
@@ -48,9 +51,9 @@ export class TableWriterService {
     if (cols.length === 0) throw new BadRequestException('empty patch');
 
     const setList = cols
-      .map((c, i) => `${assertIdent(c)} = $${i + 1}`)
+      .map((c, i) => `${assertIdent(c)} = ${this.placeholder(table, c, i + 1)}`)
       .join(', ');
-    const values = cols.map((c) => patch[c]);
+    const values = cols.map((c) => this.bindValue(table, c, patch[c]));
 
     const { rows } = await client.query<T>(
       `update ${assertIdent(table)} set ${setList} where id = $${cols.length + 1} returning *`,
@@ -78,7 +81,7 @@ export class TableWriterService {
     }
 
     const setList = patchCols
-      .map((c, i) => `${assertIdent(c)} = $${i + 1}`)
+      .map((c, i) => `${assertIdent(c)} = ${this.placeholder(table, c, i + 1)}`)
       .join(', ');
     const whereList = matchCols
       .map((c, i) => {
@@ -87,7 +90,7 @@ export class TableWriterService {
       })
       .join(' and ');
     const values = [
-      ...patchCols.map((c) => patch[c]),
+      ...patchCols.map((c) => this.bindValue(table, c, patch[c])),
       ...matchCols.map((c) => match[c]),
     ];
 
@@ -141,6 +144,18 @@ export class TableWriterService {
       [id],
     );
     return rows[0];
+  }
+
+  /** `$n`, or `$n::jsonb` when the column is jsonb. */
+  private placeholder(table: string, column: string, n: number): string {
+    return JSONB_COLUMNS[table]?.has(column) ? `$${n}::jsonb` : `$${n}`;
+  }
+
+  /** A jsonb value travels as JSON text; everything else as-is (node-postgres
+   * already maps text[] arrays, dates and numbers). SQL NULL stays NULL. */
+  private bindValue(table: string, column: string, value: unknown): unknown {
+    if (value === null || !JSONB_COLUMNS[table]?.has(column)) return value;
+    return JSON.stringify(value);
   }
 
   private assertColumns(spec: { columns: Set<string> }, cols: string[]) {

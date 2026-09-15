@@ -229,6 +229,113 @@ TABLE_REGISTRY.project_stock = spec([
   'updated_at',
 ]);
 
+// Core CRM DataStore tables (Phase 5, item 2.13). Until now only the three
+// leads tables wrote through this layer: every other DataStore write in
+// Vastos_ARC's crmApi.ts still went to Supabase while /api/firm/bootstrap read
+// the same tables from the VPS, so anything created or edited there since the
+// 11 Sep cutover landed in a database the app no longer reads. Full column
+// lists, same as crm_leads — the store sends whole rows on insert and
+// arbitrary patches on update. RLS is firm_id = current_firm_id() on every one
+// of these; crm_profiles additionally keeps guard_crm_profile_privileges
+// (role_id/firm_id changes are admin-only, never on yourself).
+//
+// crm_roles / crm_role_permissions are deliberately NOT registered: RLS gives
+// `authenticated` a SELECT policy only, so every write to them is refused on
+// both databases — registering them would expose nothing but that refusal.
+TABLE_REGISTRY.crm_profiles = spec([
+  'id', 'firm_id', 'email', 'full_name', 'role', 'phone', 'avatar_url', 'created_at', 'role_id',
+]);
+TABLE_REGISTRY.crm_projects = spec([
+  'id', 'firm_id', 'name', 'client_id', 'project_value', 'start_date', 'estimated_end_date',
+  'actual_end_date', 'status', 'description', 'address', 'created_at', 'updated_at',
+]);
+TABLE_REGISTRY.crm_project_assignments = spec([
+  'id', 'firm_id', 'project_id', 'user_id', 'role', 'assigned_at',
+]);
+TABLE_REGISTRY.crm_milestones = spec([
+  'id', 'firm_id', 'project_id', 'name', 'description', 'planned_start', 'planned_end',
+  'actual_start', 'actual_end', 'status', 'delay_reason', 'order_index', 'created_at',
+]);
+TABLE_REGISTRY.crm_site_updates = spec([
+  'id', 'firm_id', 'project_id', 'posted_by', 'date', 'note', 'photo_urls', 'created_at',
+]);
+TABLE_REGISTRY.crm_payment_plans = spec([
+  'id', 'firm_id', 'project_id', 'total_amount', 'split_count', 'client_signed_off',
+  'signed_off_at', 'created_at',
+]);
+TABLE_REGISTRY.crm_payment_splits = spec([
+  'id', 'firm_id', 'payment_plan_id', 'project_id', 'split_number', 'amount', 'trigger_type',
+  'trigger_date', 'trigger_milestone_id', 'status', 'gst_rate', 'gst_amount', 'total_with_gst',
+  'created_at',
+]);
+TABLE_REGISTRY.crm_payments_received = spec([
+  'id', 'firm_id', 'payment_split_id', 'project_id', 'amount', 'received_date', 'mode',
+  'reference', 'marked_by', 'created_at',
+]);
+TABLE_REGISTRY.crm_cost_entries = spec([
+  'id', 'firm_id', 'project_id', 'category', 'description', 'amount', 'date', 'vendor_name',
+  'receipt_url', 'created_by', 'created_at',
+]);
+TABLE_REGISTRY.crm_comments = spec([
+  'id', 'firm_id', 'project_id', 'author_id', 'content', 'is_pinned', 'parent_id', 'created_at',
+  'updated_at',
+]);
+TABLE_REGISTRY.crm_notifications = spec([
+  'id', 'firm_id', 'user_id', 'title', 'message', 'type', 'read', 'link', 'created_at',
+]);
+TABLE_REGISTRY.crm_activity_log = spec([
+  'id', 'firm_id', 'user_id', 'action', 'action_label', 'module', 'entity_type', 'entity_id',
+  'entity_name', 'previous_value', 'updated_value', 'details', 'remarks', 'created_at',
+]);
+TABLE_REGISTRY.crm_project_documents = spec([
+  'id', 'firm_id', 'project_id', 'name', 'file_type', 'file_url', 'file_size', 'category',
+  'uploaded_by', 'visible_to_client', 'version', 'description', 'created_at',
+]);
+TABLE_REGISTRY.crm_project_vendors = spec([
+  'id', 'firm_id', 'project_id', 'company_name', 'contact_person', 'phone', 'email', 'gstin',
+  'category', 'scope_of_work', 'contract_value', 'status', 'start_date', 'end_date', 'rating',
+  'notes', 'added_by', 'created_at', 'updated_at',
+]);
+TABLE_REGISTRY.crm_contacts = spec([
+  'id', 'firm_id', 'full_name', 'email', 'phone', 'company', 'tags', 'notes', 'first_seen',
+  'created_at',
+]);
+TABLE_REGISTRY.crm_pipeline_stages = spec([
+  'id', 'firm_id', 'key', 'label', 'order_index', 'category', 'is_won', 'is_lost', 'color',
+  'enabled', 'created_at',
+]);
+TABLE_REGISTRY.crm_feature_flags = spec(['id', 'firm_id', 'key', 'enabled', 'created_at']);
+TABLE_REGISTRY.crm_comm_channels = spec([
+  'id', 'firm_id', 'provider', 'category', 'display_name', 'status', 'config', 'connected_by',
+  'connected_at', 'created_at',
+]);
+TABLE_REGISTRY.crm_dashboard_layouts = spec([
+  'id', 'firm_id', 'user_id', 'module', 'name', 'is_default', 'scope', 'config', 'created_by',
+  'created_at', 'updated_at',
+]);
+
+// Marketing attribution (Phase 5, item 2.13): attribution.ts's "Map to CRM"
+// writes, the last Marketing writes still on Supabase after item 2.10. Only
+// the columns it actually sets.
+TABLE_REGISTRY.crm_ad_leads = spec(['id', 'firm_id', 'crm_lead_id', 'contact_id', 'status']);
+TABLE_REGISTRY.crm_marketing_attribution = spec(
+  ['id', 'firm_id', 'lead_id', 'stage', 'updated_at'],
+  ['ad_lead_id'],
+);
+
+/** The `jsonb` columns among the registered ones. node-postgres sends a JS
+ * array as a Postgres array literal (`[]` → `'{}'`, `[{…}]` → an unparseable
+ * `{"{…}"}`), so a jsonb value has to be JSON.stringify'd and cast instead —
+ * see TableWriterService. Found via tasks.attachments: since item 2.9 every
+ * new task stored `{}` (an object the UI then .map()s) and adding an
+ * attachment failed outright. text[] columns (tags, photo_urls) are real
+ * Postgres arrays and must NOT be listed here. */
+export const JSONB_COLUMNS: Record<string, ReadonlySet<string>> = {
+  tasks: new Set(['attachments']),
+  crm_comm_channels: new Set(['config']),
+  crm_dashboard_layouts: new Set(['config']),
+};
+
 export function getTableSpec(table: string): TableSpec {
   const spec = TABLE_REGISTRY[table];
   if (!spec) {
