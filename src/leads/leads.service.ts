@@ -7,6 +7,20 @@ export interface LeadRow {
   [key: string]: unknown;
 }
 
+export interface WebhookToken {
+  id: string;
+  label: string | null;
+  created_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+}
+
+export interface FreshWebhookToken {
+  id: string;
+  token: string;
+  firm_id: string;
+}
+
 @Injectable()
 export class LeadsService {
   constructor(private readonly db: DatabaseService) {}
@@ -32,6 +46,43 @@ export class LeadsService {
         [userId, leadId],
       );
       return rows[0] ?? null;
+    });
+  }
+
+  /**
+   * Website enquiry-capture webhook tokens (LeadsAdminPage.tsx's
+   * WebhookTokens component). All three are thin proxies to SECURITY
+   * DEFINER RPCs on crm_webhook_tokens — RLS on that table has zero
+   * policies (confirmed via pg_policies), so there is no direct-table
+   * path even if the generic /api/data layer were extended to cover it.
+   * The raw token itself is only ever returned by create — the table
+   * stores a hash and there is no read path back to it.
+   */
+  listIntakeTokens(authUid: string): Promise<WebhookToken[]> {
+    return this.db.withCaller(authUid, async (client) => {
+      const { rows } = await client.query<WebhookToken>(
+        `select * from list_lead_intake_tokens()`,
+      );
+      return rows;
+    });
+  }
+
+  createIntakeToken(
+    authUid: string,
+    label: string | null,
+  ): Promise<FreshWebhookToken> {
+    return this.db.withCaller(authUid, async (client) => {
+      const { rows } = await client.query<{ result: FreshWebhookToken }>(
+        `select create_lead_intake_token($1) as result`,
+        [label],
+      );
+      return rows[0].result;
+    });
+  }
+
+  revokeIntakeToken(authUid: string, id: string): Promise<void> {
+    return this.db.withCaller(authUid, async (client) => {
+      await client.query(`select revoke_lead_intake_token($1)`, [id]);
     });
   }
 }
