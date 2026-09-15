@@ -19,7 +19,13 @@ function originMatches(allowedOrigins: string[], origin: string): boolean {
 // Routes meant to be posted to from any origin at all — a per-firm webhook/
 // share token carried in the request is the entire trust boundary, not the
 // caller's origin, same posture these had as public Supabase Edge Functions.
+// Exact-or-slash-prefixed match only: '/api/leads/intake' must NOT also match
+// '/api/leads/intake-tokens/...' (the authenticated token-management routes,
+// which need GET/DELETE, not just POST, and a real origin check).
 const OPEN_CORS_PREFIXES = ['/api/leads/intake'];
+function isOpenCorsRoute(path: string): boolean {
+  return OPEN_CORS_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+}
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -30,7 +36,7 @@ async function bootstrap() {
     .filter(Boolean);
 
   app.enableCors((req: Request, callback: (err: Error | null, options?: object) => void) => {
-    if (OPEN_CORS_PREFIXES.some((prefix) => req.path.startsWith(prefix))) {
+    if (isOpenCorsRoute(req.path)) {
       callback(null, {
         origin: true,
         methods: ['POST'],
