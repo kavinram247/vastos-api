@@ -21,6 +21,14 @@ export interface FreshWebhookToken {
   firm_id: string;
 }
 
+export interface IntakeFields {
+  name: string;
+  email: string | null;
+  phone: string | null;
+  projectType: string | null;
+  message: string | null;
+}
+
 @Injectable()
 export class LeadsService {
   constructor(private readonly db: DatabaseService) {}
@@ -83,6 +91,29 @@ export class LeadsService {
   revokeIntakeToken(authUid: string, id: string): Promise<void> {
     return this.db.withCaller(authUid, async (client) => {
       await client.query(`select revoke_lead_intake_token($1)`, [id]);
+    });
+  }
+
+  /**
+   * The actual website-enquiry capture (formerly the `lead-intake` Supabase
+   * Edge Function calling `lead_intake_capture` against Supabase's own
+   * Postgres). No session exists — the caller is an external website's
+   * contact form — so this runs via withServiceRole and leans entirely on
+   * the RPC's own token-based authorization (crm_webhook_tokens lookup),
+   * exactly as SECURITY DEFINER + the `anon`-equivalent role did under
+   * PostgREST. Errors carry the RPC's own SQLSTATE on err.code, same set
+   * the edge function mapped (28000/42501/22023/54000).
+   */
+  captureIntake(
+    token: string,
+    fields: IntakeFields,
+  ): Promise<{ ok: true; lead_id: string }> {
+    return this.db.withServiceRole(async (client) => {
+      const { rows } = await client.query<{ result: { ok: true; lead_id: string } }>(
+        `select lead_intake_capture($1, $2, $3, $4, $5, $6) as result`,
+        [token, fields.name, fields.email, fields.phone, fields.projectType, fields.message],
+      );
+      return rows[0].result;
     });
   }
 }

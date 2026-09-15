@@ -1,4 +1,5 @@
 import { NestFactory } from '@nestjs/core';
+import type { Request } from 'express';
 import { AppModule } from './app.module';
 
 // A plain array passed to `cors`'s `origin` option only matches by exact
@@ -15,6 +16,11 @@ function originMatches(allowedOrigins: string[], origin: string): boolean {
   });
 }
 
+// Routes meant to be posted to from any origin at all — a per-firm webhook/
+// share token carried in the request is the entire trust boundary, not the
+// caller's origin, same posture these had as public Supabase Edge Functions.
+const OPEN_CORS_PREFIXES = ['/api/leads/intake'];
+
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
@@ -22,22 +28,30 @@ async function bootstrap() {
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
-  app.enableCors({
-    origin: (
-      origin: string | undefined,
-      callback: (err: Error | null, allow?: boolean) => void,
-    ) => {
-      // No Origin header = non-browser request (curl, server-to-server) — allow.
-      if (!origin || originMatches(allowedOrigins, origin)) {
-        callback(null, true);
-        return;
-      }
-      callback(new Error('Not allowed by CORS'));
-    },
-    // PATCH/DELETE added for the generic data layer (Phase 5, item 2.6) —
-    // bootstrap and document presigning only ever needed GET/POST.
-    methods: ['GET', 'POST', 'PATCH', 'DELETE'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+
+  app.enableCors((req: Request, callback: (err: Error | null, options?: object) => void) => {
+    if (OPEN_CORS_PREFIXES.some((prefix) => req.path.startsWith(prefix))) {
+      callback(null, {
+        origin: true,
+        methods: ['POST'],
+        allowedHeaders: ['Content-Type', 'Authorization', 'X-Webhook-Token'],
+      });
+      return;
+    }
+
+    // No Origin header = non-browser request (curl, server-to-server) — allow.
+    const origin = req.headers.origin as string | undefined;
+    if (!origin || originMatches(allowedOrigins, origin)) {
+      callback(null, {
+        origin: true,
+        // PATCH/DELETE added for the generic data layer (Phase 5, item 2.6) —
+        // bootstrap and document presigning only ever needed GET/POST.
+        methods: ['GET', 'POST', 'PATCH', 'DELETE'],
+        allowedHeaders: ['Content-Type', 'Authorization'],
+      });
+      return;
+    }
+    callback(new Error('Not allowed by CORS'));
   });
 
   await app.listen(process.env.PORT ?? 3000);

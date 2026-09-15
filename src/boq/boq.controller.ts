@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { SupabaseAuthGuard } from '../auth/supabase-auth.guard';
+import { BoqQuoteShareService } from './boq-quote-share.service';
 import {
   BoqService,
   type SaveBoqInput,
@@ -21,7 +22,10 @@ type AuthedRequest = Request & { user: { id: string; email?: string } };
 @Controller('api/boq')
 @UseGuards(SupabaseAuthGuard)
 export class BoqController {
-  constructor(private readonly boq: BoqService) {}
+  constructor(
+    private readonly boq: BoqService,
+    private readonly quoteShare: BoqQuoteShareService,
+  ) {}
 
   @Get('regions')
   regions(@Req() req: AuthedRequest) {
@@ -65,6 +69,16 @@ export class BoqController {
   @Post('quotations')
   saveQuotation(@Body() input: SaveQuotationInput, @Req() req: AuthedRequest) {
     return this.boq.saveQuotation(req.user.id, input);
+  }
+
+  @Get('quotations/:id/share-token')
+  shareToken(@Param('id') id: string, @Req() req: AuthedRequest) {
+    return this.quoteShare.getShareToken(req.user.id, id);
+  }
+
+  @Get('quotations/:id/schedule')
+  schedule(@Param('id') id: string, @Req() req: AuthedRequest) {
+    return this.quoteShare.fetchSchedule(req.user.id, id);
   }
 
   @Get('calibration/variance-summary')
