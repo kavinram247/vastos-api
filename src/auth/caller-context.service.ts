@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { SupabaseService } from '../supabase/supabase.service';
+import { DatabaseService } from '../db/database.service';
 
 export interface CallerContext {
   firmId: string;
@@ -29,72 +29,69 @@ interface RolePermissionsRow {
 }
 
 // Replicates the frontend's identity/RBAC chain (AuthContext.resolveSession +
-// usePermissions/can()) server-side, using the service-role client because
+// usePermissions/can()) server-side, using withServiceRole because
 // crm_roles/crm_role_permissions have no `authenticated` RLS policy at all —
 // only a permissive anon-dev one a real user's token can't see through.
+// Reads the VPS directly (not Supabase) so this resolves against the same
+// profiles/crm_profiles/crm_roles rows every other already-migrated module
+// writes to — this used to read Supabase's now-stale copy instead.
 @Injectable()
 export class CallerContextService {
-  constructor(private readonly supabase: SupabaseService) {}
+  constructor(private readonly db: DatabaseService) {}
 
   async resolve(authUser: {
     id: string;
     email?: string;
   }): Promise<CallerContext | null> {
-    const db = this.supabase.getServiceRoleClient();
+    return this.db.withServiceRole(async (client) => {
+      const { rows: profileRows } = await client.query<ProfileRow>(
+        `select id, firm_id, email from profiles where auth_uid = $1 limit 1`,
+        [authUser.id],
+      );
+      const profile = profileRows[0] ?? null;
+      if (!profile) return null;
 
-    const { data: profileData } = await db
-      .from('profiles')
-      .select('id,firm_id,email')
-      .eq('auth_uid', authUser.id)
-      .maybeSingle();
-    const profile = profileData as ProfileRow | null;
-    if (!profile) return null;
+      const { firm_id: firmId, email } = profile;
 
-    const { firm_id: firmId, email } = profile;
+      const { rows: crmProfileRows } = await client.query<CrmProfileRow>(
+        `select id, role_id from crm_profiles where email = $1 and firm_id = $2 limit 1`,
+        [email, firmId],
+      );
+      const crmProfile = crmProfileRows[0] ?? null;
 
-    const { data: crmProfileData } = await db
-      .from('crm_profiles')
-      .select('id,role_id')
-      .eq('email', email)
-      .eq('firm_id', firmId)
-      .maybeSingle();
-    const crmProfile = crmProfileData as CrmProfileRow | null;
+      const crmProfileId = crmProfile?.id ?? null;
+      const roleId = crmProfile?.role_id ?? null;
 
-    const crmProfileId = crmProfile?.id ?? null;
-    const roleId = crmProfile?.role_id ?? null;
+      // No RBAC role assigned — can() always returns false in this case on the
+      // frontend too, so treat as read-only regardless of anything else.
+      if (!roleId) {
+        return { firmId, crmProfileId, isReadOnlyViewer: true };
+      }
 
-    // No RBAC role assigned — can() always returns false in this case on the
-    // frontend too, so treat as read-only regardless of anything else.
-    if (!roleId) {
-      return { firmId, crmProfileId, isReadOnlyViewer: true };
-    }
+      const { rows: roleRows } = await client.query<RoleRow>(
+        `select scope, is_admin, enabled from crm_roles where id = $1 limit 1`,
+        [roleId],
+      );
+      const role = roleRows[0] ?? null;
 
-    const { data: roleData } = await db
-      .from('crm_roles')
-      .select('scope,is_admin,enabled')
-      .eq('id', roleId)
-      .maybeSingle();
-    const role = roleData as RoleRow | null;
+      if (!role || !role.enabled) {
+        return { firmId, crmProfileId, isReadOnlyViewer: true };
+      }
+      if (role.is_admin) {
+        return { firmId, crmProfileId, isReadOnlyViewer: false };
+      }
 
-    if (!role || !role.enabled) {
-      return { firmId, crmProfileId, isReadOnlyViewer: true };
-    }
-    if (role.is_admin) {
-      return { firmId, crmProfileId, isReadOnlyViewer: false };
-    }
+      const { rows: permissionRows } = await client.query<RolePermissionsRow>(
+        `select actions from crm_role_permissions where role_id = $1 and module = 'documents' limit 1`,
+        [roleId],
+      );
+      const permissions = permissionRows[0] ?? null;
 
-    const { data: permissionsData } = await db
-      .from('crm_role_permissions')
-      .select('actions')
-      .eq('role_id', roleId)
-      .eq('module', 'documents')
-      .maybeSingle();
-    const permissions = permissionsData as RolePermissionsRow | null;
+      const actions = permissions?.actions ?? [];
+      const isReadOnlyViewer =
+        role.scope === 'own' || !actions.includes('create');
 
-    const actions = permissions?.actions ?? [];
-    const isReadOnlyViewer =
-      role.scope === 'own' || !actions.includes('create');
-
-    return { firmId, crmProfileId, isReadOnlyViewer };
+      return { firmId, crmProfileId, isReadOnlyViewer };
+    });
   }
 }

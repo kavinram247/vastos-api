@@ -1,37 +1,22 @@
 import { Test } from '@nestjs/testing';
 import { CallerContextService } from './caller-context.service';
-import { SupabaseService } from '../supabase/supabase.service';
+import { DatabaseService } from '../db/database.service';
 
 type Row = Record<string, unknown> | null;
 
-interface MockQuery {
-  select: (columns: string) => MockQuery;
-  eq: (column: string, value: string) => MockQuery;
-  maybeSingle: () => Promise<{ data: Row; error: null }>;
-}
-
-function makeQuery(row: Row): MockQuery {
-  const query: MockQuery = {
-    select: () => query,
-    eq: () => query,
-    maybeSingle: () => Promise.resolve({ data: row, error: null }),
-  };
-  return query;
-}
-
-function makeDb(rows: {
+function makeClient(rows: {
   profile: Row;
   crmProfile: Row;
   role: Row;
   permissions: Row;
-}): { from: (table: string) => MockQuery } {
+}) {
   return {
-    from: (table: string) => {
-      if (table === 'profiles') return makeQuery(rows.profile);
-      if (table === 'crm_profiles') return makeQuery(rows.crmProfile);
-      if (table === 'crm_roles') return makeQuery(rows.role);
-      if (table === 'crm_role_permissions') return makeQuery(rows.permissions);
-      throw new Error(`unexpected table ${table}`);
+    query: async (sql: string) => {
+      if (sql.includes('from profiles')) return { rows: rows.profile ? [rows.profile] : [] };
+      if (sql.includes('from crm_profiles')) return { rows: rows.crmProfile ? [rows.crmProfile] : [] };
+      if (sql.includes('from crm_roles')) return { rows: rows.role ? [rows.role] : [] };
+      if (sql.includes('from crm_role_permissions')) return { rows: rows.permissions ? [rows.permissions] : [] };
+      throw new Error(`unexpected query: ${sql}`);
     },
   };
 }
@@ -42,14 +27,14 @@ async function build(rows: {
   role: Row;
   permissions: Row;
 }) {
-  const supabase = {
-    getServiceRoleClient: () => makeDb(rows),
-  } as unknown as SupabaseService;
+  const db = {
+    withServiceRole: (fn: (client: unknown) => Promise<unknown>) => fn(makeClient(rows)),
+  } as unknown as DatabaseService;
 
   const moduleRef = await Test.createTestingModule({
     providers: [
       CallerContextService,
-      { provide: SupabaseService, useValue: supabase },
+      { provide: DatabaseService, useValue: db },
     ],
   }).compile();
 
