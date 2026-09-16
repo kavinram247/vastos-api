@@ -80,11 +80,17 @@ accessories:
     image: minio/minio:RELEASE.2025-09-07T16-13-09Z
     host: 89.116.121.54
     port: "127.0.0.1:9000:9000"
-    cmd: "server /data"
+    # Console re-enabled for browsing uploaded files by hand (Phase 5, item
+    # 3.8 follow-up). Kamal accessories only take one port via `port:`, so
+    # the console's own port goes through `options.publish` instead — still
+    # 127.0.0.1-only, reach it via an SSH tunnel, never expose it publicly.
+    options:
+      publish: "127.0.0.1:9001:9001"
+    cmd: "server /data --console-address :9001"
     env:
       clear:
         MINIO_ROOT_USER: vastos-files
-        MINIO_BROWSER: "off"
+        MINIO_BROWSER: "on"
       secret:
         - MINIO_ROOT_PASSWORD
     volumes:
