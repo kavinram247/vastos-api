@@ -1,6 +1,6 @@
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 import { DocumentsController } from './documents.controller';
 import { DocumentsService } from './documents.service';
 import { CallerContextService } from '../auth/caller-context.service';
@@ -12,6 +12,19 @@ type AuthedRequest = Request & { user: { id: string; email?: string } };
 const REQ = {
   user: { id: 'auth-1', email: 'a@b.com' },
 } as unknown as AuthedRequest;
+
+const FILE = {
+  buffer: Buffer.from('hello'),
+  mimetype: 'application/pdf',
+  originalname: 'a.pdf',
+  size: 5,
+} as Express.Multer.File;
+
+function makeRes(): Response {
+  return {
+    setHeader: jest.fn(),
+  } as unknown as Response;
+}
 
 type Row = Record<string, unknown> | null;
 
@@ -40,8 +53,13 @@ async function build(
         provide: DocumentsService,
         useValue: {
           buildObjectKey: () => 'firm-1/project-1/uuid',
-          presignUpload: () => Promise.resolve('https://r2.example/upload'),
-          presignDownload: () => Promise.resolve('https://r2.example/download'),
+          uploadObject: () => Promise.resolve(),
+          downloadObject: () =>
+            Promise.resolve({
+              body: { pipe: jest.fn() },
+              contentType: 'application/pdf',
+              contentLength: 5,
+            }),
           ...documents,
         },
       },
@@ -51,18 +69,14 @@ async function build(
 }
 
 describe('DocumentsController', () => {
-  describe('presignUpload', () => {
+  describe('upload', () => {
     it('403s when caller context is null (no matching profile)', async () => {
       const controller = await build(
         { resolve: () => Promise.resolve(null) },
         makeDb(null),
       );
       await expect(
-        controller.presignUpload(
-          'project-1',
-          { filename: 'a.pdf', contentType: 'application/pdf', sizeBytes: 100 },
-          REQ,
-        ),
+        controller.upload('project-1', FILE, REQ),
       ).rejects.toBeInstanceOf(ForbiddenException);
     });
 
@@ -79,12 +93,25 @@ describe('DocumentsController', () => {
         makeDb({ id: 'project-1' }),
       );
       await expect(
-        controller.presignUpload(
-          'project-1',
-          { filename: 'a.pdf', contentType: 'application/pdf', sizeBytes: 100 },
-          REQ,
-        ),
+        controller.upload('project-1', FILE, REQ),
       ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('404s when no file is provided', async () => {
+      const controller = await build(
+        {
+          resolve: () =>
+            Promise.resolve({
+              firmId: 'firm-1',
+              crmProfileId: 'cp1',
+              isReadOnlyViewer: false,
+            }),
+        },
+        makeDb({ id: 'project-1' }),
+      );
+      await expect(
+        controller.upload('project-1', undefined as unknown as Express.Multer.File, REQ),
+      ).rejects.toBeInstanceOf(NotFoundException);
     });
 
     it('404s when the project is not found in the caller firm', async () => {
@@ -100,15 +127,11 @@ describe('DocumentsController', () => {
         makeDb(null),
       );
       await expect(
-        controller.presignUpload(
-          'project-1',
-          { filename: 'a.pdf', contentType: 'application/pdf', sizeBytes: 100 },
-          REQ,
-        ),
+        controller.upload('project-1', FILE, REQ),
       ).rejects.toBeInstanceOf(NotFoundException);
     });
 
-    it('returns a presigned URL on the happy path', async () => {
+    it('uploads and returns the object key on the happy path', async () => {
       const controller = await build(
         {
           resolve: () =>
@@ -120,20 +143,12 @@ describe('DocumentsController', () => {
         },
         makeDb({ id: 'project-1' }),
       );
-      const result = await controller.presignUpload(
-        'project-1',
-        { filename: 'a.pdf', contentType: 'application/pdf', sizeBytes: 100 },
-        REQ,
-      );
-      expect(result).toEqual({
-        uploadUrl: 'https://r2.example/upload',
-        objectKey: 'firm-1/project-1/uuid',
-        expiresIn: 600,
-      });
+      const result = await controller.upload('project-1', FILE, REQ);
+      expect(result).toEqual({ objectKey: 'firm-1/project-1/uuid', sizeBytes: 5 });
     });
   });
 
-  describe('presignDownload', () => {
+  describe('download', () => {
     it('404s when the document row is not found in the caller firm', async () => {
       const controller = await build(
         {
@@ -147,7 +162,7 @@ describe('DocumentsController', () => {
         makeDb(null),
       );
       await expect(
-        controller.presignDownload('doc-1', 'inline', REQ),
+        controller.download('doc-1', 'inline', REQ, makeRes()),
       ).rejects.toBeInstanceOf(NotFoundException);
     });
 
@@ -168,7 +183,7 @@ describe('DocumentsController', () => {
         }),
       );
       await expect(
-        controller.presignDownload('doc-1', 'inline', REQ),
+        controller.download('doc-1', 'inline', REQ, makeRes()),
       ).rejects.toBeInstanceOf(NotFoundException);
     });
 
@@ -189,11 +204,11 @@ describe('DocumentsController', () => {
         }),
       );
       await expect(
-        controller.presignDownload('doc-1', 'inline', REQ),
+        controller.download('doc-1', 'inline', REQ, makeRes()),
       ).rejects.toBeInstanceOf(NotFoundException);
     });
 
-    it('returns a presigned URL on the happy path for a visible document', async () => {
+    it('streams the object and sets headers on the happy path', async () => {
       const controller = await build(
         {
           resolve: () =>
@@ -209,15 +224,14 @@ describe('DocumentsController', () => {
           visible_to_client: true,
         }),
       );
-      const result = await controller.presignDownload(
-        'doc-1',
-        'attachment',
-        REQ,
+      const res = makeRes();
+      await controller.download('doc-1', 'attachment', REQ, res);
+      expect(res.setHeader).toHaveBeenCalledWith(
+        'Content-Disposition',
+        'attachment; filename="contract.pdf"',
       );
-      expect(result).toEqual({
-        downloadUrl: 'https://r2.example/download',
-        expiresIn: 300,
-      });
+      expect(res.setHeader).toHaveBeenCalledWith('Content-Type', 'application/pdf');
+      expect(res.setHeader).toHaveBeenCalledWith('Content-Length', 5);
     });
   });
 });

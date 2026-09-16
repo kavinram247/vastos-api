@@ -36,8 +36,9 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           ALLOWED_ORIGINS: ${{ secrets.ALLOWED_ORIGINS }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          # R2_* omitted — see config/deploy.yml. Re-add these four env lines
-          # (secrets already exist in the repo) when R2 goes back into env.secret.
+          # Same secret the minio accessory boots with (Phase 5, item 3.8) —
+          # already existed in the repo from when that accessory was set up.
+          MINIO_ROOT_PASSWORD: ${{ secrets.MINIO_ROOT_PASSWORD }}
         run: |
           kamal lock release || true
           kamal deploy

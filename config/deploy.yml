@@ -30,12 +30,17 @@ registry:
 # ALLOWED_ORIGINS isn't sensitive but goes through `secret:` (sourced from the
 # deploy environment / .kamal/secrets) rather than a hardcoded `clear:` value,
 # since it changes as Vercel domains do.
-#
-# R2_* deliberately omitted for now: DocumentsService builds its S3 client
-# lazily, so the app boots and serves everything except document upload/
-# download without them. Add the four R2_* vars back here (and export them)
-# when the documents feature is wired up / tested.
 env:
+  clear:
+    # Document storage moved off R2 onto the minio accessory below (Phase 5,
+    # item 3.8) — same credentials the accessory itself uses, so the app
+    # authenticates as the accessory's root user. MINIO_ENDPOINT is the
+    # accessory's container name on the shared `kamal` network, not a public
+    # URL — there is no public MinIO endpoint, uploads/downloads proxy
+    # through this app instead (see DocumentsController).
+    MINIO_ROOT_USER: vastos-files
+    MINIO_ENDPOINT: http://vastos-api-minio:9000
+    MINIO_BUCKET_NAME: vastos-documents
   secret:
     - SUPABASE_URL
     - SUPABASE_ANON_KEY
@@ -46,6 +51,8 @@ env:
     #   postgres://vastos_app:<pw>@vastos-api-postgres:5432/vastos
     # The app boots without it (endpoints 503 until set).
     - DATABASE_URL
+    # Same secret the minio accessory below already uses to boot itself.
+    - MINIO_ROOT_PASSWORD
 
 ssh:
   user: deploy

@@ -1,6 +1,4 @@
 import {
-  BadRequestException,
-  Body,
   Controller,
   ForbiddenException,
   Get,
@@ -9,9 +7,13 @@ import {
   Post,
   Query,
   Req,
+  Res,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
-import type { Request } from 'express';
+import { FileInterceptor } from '@nestjs/platform-express';
+import type { Request, Response } from 'express';
 import { SupabaseAuthGuard } from '../auth/supabase-auth.guard';
 import { CallerContextService } from '../auth/caller-context.service';
 import { DatabaseService } from '../db/database.service';
@@ -19,11 +21,7 @@ import { DocumentsService } from './documents.service';
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
-interface PresignUploadBody {
-  filename: string;
-  contentType: string;
-  sizeBytes: number;
-}
+type AuthedRequest = Request & { user: { id: string; email?: string } };
 
 @Controller('documents')
 @UseGuards(SupabaseAuthGuard)
@@ -34,24 +32,23 @@ export class DocumentsController {
     private readonly db: DatabaseService,
   ) {}
 
-  @Post(':projectId/presign-upload')
-  async presignUpload(
+  // multipart/form-data, field name "file" — the browser sends the bytes
+  // straight to us now (MinIO has no public endpoint to presign a URL for),
+  // and we relay them over the private network it shares with Postgres.
+  @Post(':projectId/upload')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES } }))
+  async upload(
     @Param('projectId') projectId: string,
-    @Body() body: PresignUploadBody,
-    @Req() req: Request & { user: { id: string; email?: string } },
+    @UploadedFile() file: Express.Multer.File,
+    @Req() req: AuthedRequest,
   ) {
     const ctx = await this.callerContext.resolve(req.user);
     if (!ctx) throw new ForbiddenException();
     if (ctx.isReadOnlyViewer) {
       throw new ForbiddenException('No permission to upload documents');
     }
-    if (!body?.filename || !body?.contentType || !body?.sizeBytes) {
-      throw new BadRequestException(
-        'filename, contentType, sizeBytes required',
-      );
-    }
-    if (body.sizeBytes > MAX_UPLOAD_BYTES) {
-      throw new BadRequestException('File exceeds 25MB limit');
+    if (!file) {
+      throw new NotFoundException('No file provided');
     }
 
     const project = await this.db.withServiceRole(async (client) => {
@@ -64,18 +61,17 @@ export class DocumentsController {
     if (!project) throw new NotFoundException('Project not found');
 
     const objectKey = this.documents.buildObjectKey(ctx.firmId, projectId);
-    const uploadUrl = await this.documents.presignUpload(
-      objectKey,
-      body.contentType,
-    );
-    return { uploadUrl, objectKey, expiresIn: 600 };
+    const contentType = file.mimetype || 'application/octet-stream';
+    await this.documents.uploadObject(objectKey, contentType, file.buffer);
+    return { objectKey, sizeBytes: file.size };
   }
 
-  @Get(':documentId/presign-download')
-  async presignDownload(
+  @Get(':documentId/download')
+  async download(
     @Param('documentId') documentId: string,
     @Query('disposition') disposition: 'inline' | 'attachment' = 'inline',
-    @Req() req: Request & { user: { id: string; email?: string } },
+    @Req() req: AuthedRequest,
+    @Res() res: Response,
   ) {
     const ctx = await this.callerContext.resolve(req.user);
     if (!ctx) throw new ForbiddenException();
@@ -101,11 +97,16 @@ export class DocumentsController {
       throw new NotFoundException('File not available');
     }
 
-    const downloadUrl = await this.documents.presignDownload(
-      row.file_url,
-      row.name,
-      disposition === 'attachment' ? 'attachment' : 'inline',
+    const object = await this.documents.downloadObject(row.file_url);
+    const safeDisposition = disposition === 'attachment' ? 'attachment' : 'inline';
+    res.setHeader(
+      'Content-Disposition',
+      `${safeDisposition}; filename="${row.name.replace(/"/g, "'")}"`,
     );
-    return { downloadUrl, expiresIn: 300 };
+    res.setHeader('Content-Type', object.contentType || 'application/octet-stream');
+    if (object.contentLength != null) {
+      res.setHeader('Content-Length', object.contentLength);
+    }
+    object.body.pipe(res);
   }
 }
