@@ -323,6 +323,15 @@ TABLE_REGISTRY.crm_marketing_attribution = spec(
   ['ad_lead_id'],
 );
 
+// The firm's own letterhead — company name, GSTIN, address and logo, which
+// billing documents render (VASTOS-008). `id` is filterable but deliberately
+// not writable: a firm may edit itself, never repoint the row. firms_sel /
+// firms_mod already scope both reads and writes to current_firm_id().
+TABLE_REGISTRY.firms = {
+  columns: new Set(['name', 'gstin', 'address', 'logo_url', 'payment_split_default']),
+  filterable: new Set(['id']),
+};
+
 /** The `jsonb` columns among the registered ones. node-postgres sends a JS
  * array as a Postgres array literal (`[]` → `'{}'`, `[{…}]` → an unparseable
  * `{"{…}"}`), so a jsonb value has to be JSON.stringify'd and cast instead —
