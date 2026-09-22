@@ -109,6 +109,8 @@ const HYDRATION_TABLES: Record<string, string> = {
   roles: 'crm_roles',
   rolePermissions: 'crm_role_permissions',
   dashboardLayouts: 'crm_dashboard_layouts',
+  clientEntities: 'crm_client_entities',
+  invoices: 'crm_invoices',
 };
 
 // Both sides of the map are compile-time constants, never user input, but

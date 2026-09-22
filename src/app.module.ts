@@ -15,6 +15,7 @@ import { MarketingModule } from './marketing/marketing.module';
 import { InventoryModule } from './inventory/inventory.module';
 import { PurchaseModule } from './purchase/purchase.module';
 import { VendorAccessModule } from './vendor-access/vendor-access.module';
+import { InvoicesModule } from './invoices/invoices.module';
 import { InvitesModule } from './invites/invites.module';
 
 @Module({
@@ -35,6 +36,7 @@ import { InvitesModule } from './invites/invites.module';
     InventoryModule,
     PurchaseModule,
     VendorAccessModule,
+    InvoicesModule,
     InvitesModule,
   ],
 })

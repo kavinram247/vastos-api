@@ -272,6 +272,25 @@ TABLE_REGISTRY.crm_payments_received = spec([
   'id', 'firm_id', 'payment_split_id', 'project_id', 'amount', 'received_date', 'mode',
   'reference', 'marked_by', 'created_at',
 ]);
+// Multi-entity billing (VASTOS-009). Entities are ordinary firm-scoped rows —
+// any member who maintains a client maintains its billing entities.
+TABLE_REGISTRY.crm_client_entities = spec([
+  'id', 'firm_id', 'client_id', 'legal_name', 'gstin', 'address',
+  'billing_contact_name', 'billing_email', 'billing_phone', 'is_default',
+  'created_at', 'updated_at',
+]);
+
+// Invoices are registered so they can be READ. Writes are deliberately not
+// exposed: `columns` lists only the two fields a void touches, and the database
+// is stricter still — crm_invoices has no insert policy (crm_issue_invoice is
+// the only way in, via POST /api/invoices/issue) and no delete policy, with a
+// trigger reducing an update to voiding. Listing the full column set here would
+// only expose that refusal.
+TABLE_REGISTRY.crm_invoices = {
+  columns: new Set(['status', 'void_reason']),
+  filterable: new Set(['id', 'project_id', 'payment_split_id', 'status', 'fy']),
+};
+
 TABLE_REGISTRY.crm_cost_entries = spec([
   'id', 'firm_id', 'project_id', 'category', 'description', 'amount', 'date', 'vendor_name',
   'receipt_url', 'created_by', 'created_at',
