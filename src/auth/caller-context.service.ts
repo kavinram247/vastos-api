@@ -5,6 +5,9 @@ export interface CallerContext {
   firmId: string;
   crmProfileId: string | null;
   isReadOnlyViewer: boolean;
+  /** crm_roles.is_admin — implicit all-access. Mirrors the SQL helper
+   *  current_is_firm_admin() that attendance_records' RLS uses. */
+  isAdmin: boolean;
 }
 
 interface ProfileRow {
@@ -65,7 +68,7 @@ export class CallerContextService {
       // No RBAC role assigned — can() always returns false in this case on the
       // frontend too, so treat as read-only regardless of anything else.
       if (!roleId) {
-        return { firmId, crmProfileId, isReadOnlyViewer: true };
+        return { firmId, crmProfileId, isReadOnlyViewer: true, isAdmin: false };
       }
 
       const { rows: roleRows } = await client.query<RoleRow>(
@@ -75,10 +78,10 @@ export class CallerContextService {
       const role = roleRows[0] ?? null;
 
       if (!role || !role.enabled) {
-        return { firmId, crmProfileId, isReadOnlyViewer: true };
+        return { firmId, crmProfileId, isReadOnlyViewer: true, isAdmin: false };
       }
       if (role.is_admin) {
-        return { firmId, crmProfileId, isReadOnlyViewer: false };
+        return { firmId, crmProfileId, isReadOnlyViewer: false, isAdmin: true };
       }
 
       const { rows: permissionRows } = await client.query<RolePermissionsRow>(
@@ -91,7 +94,7 @@ export class CallerContextService {
       const isReadOnlyViewer =
         role.scope === 'own' || !actions.includes('create');
 
-      return { firmId, crmProfileId, isReadOnlyViewer };
+      return { firmId, crmProfileId, isReadOnlyViewer, isAdmin: false };
     });
   }
 }

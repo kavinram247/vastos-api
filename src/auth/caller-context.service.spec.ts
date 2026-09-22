@@ -66,6 +66,7 @@ describe('CallerContextService', () => {
       firmId: 'firm-1',
       crmProfileId: 'cp1',
       isReadOnlyViewer: true,
+      isAdmin: false,
     });
   });
 
