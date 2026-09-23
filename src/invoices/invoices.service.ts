@@ -1,4 +1,9 @@
-import { Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  InternalServerErrorException,
+} from '@nestjs/common';
 import { DatabaseService } from '../db/database.service';
 
 /** Mirrors the crm_invoices row shape the migration defines. */
@@ -44,11 +49,15 @@ export class InvoicesService {
    */
   issue(authUid: string, splitId: string, clientEntityId?: string | null) {
     return this.db.withCaller(authUid, async (client) => {
-      const { rows } = await client.query<Invoice>(
-        'select * from crm_issue_invoice($1, $2)',
-        [splitId, clientEntityId ?? null],
-      );
-      return rows[0];
+      try {
+        const { rows } = await client.query<Invoice>(
+          'select * from crm_issue_invoice($1, $2)',
+          [splitId, clientEntityId ?? null],
+        );
+        return rows[0];
+      } catch (err) {
+        throw translatePgError(err);
+      }
     });
   }
 
@@ -56,12 +65,38 @@ export class InvoicesService {
    *  update to exactly this, and stamps voided_at itself. */
   void(authUid: string, id: string, reason: string | null) {
     return this.db.withCaller(authUid, async (client) => {
-      const { rows } = await client.query<Invoice>(
-        `update crm_invoices set status = 'void', void_reason = $2
-          where id = $1 returning *`,
-        [id, reason],
-      );
-      return rows[0];
+      try {
+        const { rows } = await client.query<Invoice>(
+          `update crm_invoices set status = 'void', void_reason = $2
+            where id = $1 returning *`,
+          [id, reason],
+        );
+        return rows[0];
+      } catch (err) {
+        throw translatePgError(err);
+      }
     });
   }
+}
+
+/**
+ * crm_issue_invoice() and the invoice guard trigger reject bad input by raising,
+ * and an unmapped raise reaches the browser as a bare 500 — which tells whoever
+ * clicked Issue nothing at all. These are the caller's problem, not the
+ * server's, so give them their real status and message:
+ *
+ *   22023 invalid_parameter_value  — unknown split, unknown entity, an entity
+ *                                    belonging to a different client
+ *   42501 insufficient_privilege   — no firm in session, or an attempt to edit
+ *                                    or reinstate an issued invoice
+ *
+ * Anything else is genuinely ours and stays a 500 with its detail logged rather
+ * than shown.
+ */
+function translatePgError(err: unknown): Error {
+  const code = (err as { code?: string })?.code;
+  const message = (err as { message?: string })?.message ?? 'invoice request failed';
+  if (code === '22023') return new BadRequestException(message);
+  if (code === '42501') return new ForbiddenException(message);
+  return new InternalServerErrorException('Could not issue the invoice');
 }
